@@ -1,5 +1,7 @@
 # 구매 분석 대시보드 — 톤급·모델별 협력업체 비중 분석
 
+> 🌐 **배포 페이지: [https://aebonlee.github.io/hd-project01/](https://aebonlee.github.io/hd-project01/)** · 저장소: https://github.com/aebonlee/hd-project01
+
 빅데이터 기반 **장비 모델별 구매 품목 및 협력업체 분석 대시보드** (기획: 정하진 · 생성형 AI 업무자동화 전문가과정 1차수)
 
 구매 데이터와 장비 모델 데이터를 **품번(Part Number) 기준으로 조인**하여,
