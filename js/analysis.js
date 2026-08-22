@@ -42,20 +42,30 @@
   function findColumn(headers, key) {
     var aliases = COLUMN_ALIASES[key];
     var norm = function (h) { return String(h).trim().toLowerCase().replace(/\s+/g, ""); };
+    // 1) 원문 그대로 일치 (앞뒤 공백만 무시)
+    for (var i0 = 0; i0 < aliases.length; i0++) {
+      for (var j0 = 0; j0 < headers.length; j0++) {
+        if (String(headers[j0]).trim() === aliases[i0]) return headers[j0];
+      }
+    }
+    // 2) 정규화(공백 제거·소문자) 후 일치
     for (var i = 0; i < aliases.length; i++) {
       var a = norm(aliases[i]);
       for (var j = 0; j < headers.length; j++) {
         if (norm(headers[j]) === a) return headers[j];
       }
     }
-    // 부분 일치 fallback
+    // 3) 부분 일치 — 최후 수단. 후보 헤더가 정확히 하나일 때만 채택하고,
+    //    여러 개가 걸리면 잘못 매핑될 수 있으므로 미매핑(null)으로 남긴다.
+    var candidates = {};
     for (var i2 = 0; i2 < aliases.length; i2++) {
       var a2 = norm(aliases[i2]);
       for (var j2 = 0; j2 < headers.length; j2++) {
-        if (norm(headers[j2]).indexOf(a2) !== -1) return headers[j2];
+        if (norm(headers[j2]).indexOf(a2) !== -1) candidates[headers[j2]] = true;
       }
     }
-    return null;
+    var found = Object.keys(candidates);
+    return found.length === 1 ? found[0] : null;
   }
 
   function toNumber(v) {
@@ -67,7 +77,7 @@
 
   /** 객체 배열(헤더 키) → 표준 구매 레코드 */
   function normalizePurchase(rows) {
-    if (!rows.length) return { rows: [], mapping: null, errors: ["구매 데이터가 비어 있습니다."] };
+    if (!rows.length) return { rows: [], mapping: null, errors: ["구매 데이터가 비어 있습니다."], warnings: [] };
     var headers = Object.keys(rows[0]);
     var map = {
       part: findColumn(headers, "part"),
@@ -77,9 +87,10 @@
     };
     var errors = [];
     ["part", "vendor", "qty", "amt"].forEach(function (k) {
-      if (!map[k]) errors.push("구매 데이터에서 '" + k + "' 컬럼을 찾지 못했습니다.");
+      if (!map[k]) errors.push("구매 데이터에서 '" + k + "' 컬럼을 찾지 못했습니다(유사 컬럼이 여러 개면 모호하여 매핑하지 않습니다 — 헤더명을 표준 양식에 맞춰 주세요).");
     });
-    if (errors.length) return { rows: [], mapping: map, errors: errors };
+    if (errors.length) return { rows: [], mapping: map, errors: errors, warnings: [] };
+    var negativeCount = 0;
     var out = rows.map(function (r) {
       return {
         part: String(r[map.part]).trim(),
@@ -87,13 +98,22 @@
         qty: toNumber(r[map.qty]),
         amt: toNumber(r[map.amt])
       };
-    }).filter(function (r) { return r.part && r.vendor; });
-    return { rows: out, mapping: map, errors: [] };
+    }).filter(function (r) { return r.part && r.vendor; })
+      .filter(function (r) {
+        // 음수 물량/금액은 데이터 오류로 보고 집계에서 제외
+        if (r.qty < 0 || r.amt < 0) { negativeCount++; return false; }
+        return true;
+      });
+    var warnings = [];
+    if (negativeCount > 0) {
+      warnings.push("구매 물량 또는 구매 금액이 음수인 " + negativeCount + "행을 데이터 오류로 판단하여 집계에서 제외했습니다. 원본 엑셀을 확인해 주세요.");
+    }
+    return { rows: out, mapping: map, errors: [], warnings: warnings };
   }
 
   /** 객체 배열 → 표준 모델 레코드 */
   function normalizeModel(rows) {
-    if (!rows.length) return { rows: [], mapping: null, errors: ["모델 데이터가 비어 있습니다."] };
+    if (!rows.length) return { rows: [], mapping: null, errors: ["모델 데이터가 비어 있습니다."], warnings: [] };
     var headers = Object.keys(rows[0]);
     var map = {
       part: findColumn(headers, "part"),
@@ -102,9 +122,9 @@
     };
     var errors = [];
     ["part", "model", "tonCode"].forEach(function (k) {
-      if (!map[k]) errors.push("모델 데이터에서 '" + k + "' 컬럼을 찾지 못했습니다.");
+      if (!map[k]) errors.push("모델 데이터에서 '" + k + "' 컬럼을 찾지 못했습니다(유사 컬럼이 여러 개면 모호하여 매핑하지 않습니다 — 헤더명을 표준 양식에 맞춰 주세요).");
     });
-    if (errors.length) return { rows: [], mapping: map, errors: errors };
+    if (errors.length) return { rows: [], mapping: map, errors: errors, warnings: [] };
     var out = rows.map(function (r) {
       return {
         part: String(r[map.part]).trim(),
@@ -112,11 +132,12 @@
         tonCode: String(r[map.tonCode]).trim().toUpperCase()
       };
     }).filter(function (r) { return r.part && r.model; });
-    return { rows: out, mapping: map, errors: [] };
+    return { rows: out, mapping: map, errors: [], warnings: [] };
   }
 
   /**
    * 품번 기준 조인. 1:N(품번→모델)은 모든 모델에 연계.
+   * 각 레코드는 구매 원본 행 인덱스(srcIdx)를 보존한다 — 1:N 중복 제거 집계용.
    * 반환: { records, unmatchedParts(모델 정보 없는 품번 목록) }
    */
   function joinData(purchaseRows, modelRows) {
@@ -126,13 +147,13 @@
     });
     var records = [];
     var unmatched = {};
-    purchaseRows.forEach(function (p) {
+    purchaseRows.forEach(function (p, srcIdx) {
       var models = byPart[p.part];
       if (!models || !models.length) {
         unmatched[p.part] = true;
         var t0 = null;
         records.push({
-          part: p.part, vendor: p.vendor, qty: p.qty, amt: p.amt,
+          srcIdx: srcIdx, part: p.part, vendor: p.vendor, qty: p.qty, amt: p.amt,
           model: "(모델 미매칭)", tonCode: "-", ton: t0, tonLabel: tonLabel(t0)
         });
         return;
@@ -140,7 +161,7 @@
       models.forEach(function (m) {
         var t = parseTonCode(m.tonCode);
         records.push({
-          part: p.part, vendor: p.vendor, qty: p.qty, amt: p.amt,
+          srcIdx: srcIdx, part: p.part, vendor: p.vendor, qty: p.qty, amt: p.amt,
           model: m.model, tonCode: m.tonCode, ton: t, tonLabel: tonLabel(t)
         });
       });
