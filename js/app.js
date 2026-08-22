@@ -54,6 +54,12 @@
     el.textContent = msg;
   }
 
+  /** 정상 로드 메시지에 검증 경고(음수 제외 등)를 덧붙인다 */
+  function withWarnings(msg, r) {
+    if (r.warnings && r.warnings.length) msg += "\n⚠ " + r.warnings.join("\n⚠ ");
+    return msg;
+  }
+
   function tryBuild() {
     if (!state.purchase || !state.model) return;
     var joined = A.joinData(state.purchase, state.model);
@@ -83,7 +89,7 @@
     var m = A.normalizeModel(d.model);
     state.purchase = p.rows;
     state.model = m.rows;
-    setStatus($("purchase-status"), true, "샘플 구매 데이터 " + p.rows.length + "행 로드됨");
+    setStatus($("purchase-status"), true, withWarnings("샘플 구매 데이터 " + p.rows.length + "행 로드됨", p));
     setStatus($("model-status"), true, "샘플 모델 데이터 " + m.rows.length + "행 로드됨");
     tryBuild();
   }
@@ -120,7 +126,7 @@
     renderKpis(hits);
     renderTonChart(tree);
     renderVendorChart(recs);
-    renderTree(tree, hits);
+    renderTree(tree);
     renderConcTable(hits);
     $("dup-note").textContent = state.unmatched.length
       ? "※ 모델 데이터에 없는 품번 " + state.unmatched.length + "개는 '미분류'로 표시됩니다. 1:N 품번(여러 모델 적용)은 기획서 기준에 따라 모든 모델에 중복 집계됩니다. 상단 KPI는 구매 원본 기준(중복 없음)입니다."
@@ -189,10 +195,11 @@
     $("vendor-chart-title").textContent = "업체별 " + basisLabel() + " 비중 — " + (scope.length ? scope.join(" · ") : "전체");
 
     var node = { qty: 0, amt: 0, vendorMap: {} };
-    // 업체 비중은 구매 레코드 중복을 피하려 품번+업체 단위로 유일화
+    // 업체 비중은 1:N 조인 중복을 피하려 구매 원본 행(srcIdx) 단위로 유일화
+    // (품번+업체 키는 동일 품번·업체 조합이 여러 행일 때 물량·금액이 누락될 수 있음)
     var seen = {};
     recs.forEach(function (r) {
-      var key = r.part + " " + r.vendor;
+      var key = r.srcIdx !== undefined ? "i" + r.srcIdx : r.part + " " + r.vendor;
       if (seen[key]) return;
       seen[key] = true;
       node.qty += r.qty; node.amt += r.amt;
@@ -373,7 +380,7 @@
       var r = A.normalizePurchase(rows);
       if (r.errors.length) return setStatus($("purchase-status"), false, r.errors.join("\n"));
       state.purchase = r.rows;
-      setStatus($("purchase-status"), true, f.name + " — " + r.rows.length + "행 인식됨");
+      setStatus($("purchase-status"), true, withWarnings(f.name + " — " + r.rows.length + "행 인식됨", r));
       tryBuild();
     });
   });
