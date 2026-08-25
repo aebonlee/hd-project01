@@ -135,7 +135,14 @@ create trigger model_fill_tonnage
 --    그래서 모델 수로 나눠 안분(按分)한다. 안 그러면 합계가 실제보다 커진다.
 -- ----------------------------------------------------------------------------
 
-create or replace view public.purchase_expanded as
+
+-- ⚠ 뷰에는 `with (security_invoker = true)` 를 붙인다.
+--   붙이지 않으면 뷰는 **만든 사람(postgres)의 권한**으로 돌아, 뷰를 읽을 수 있는
+--   사람이 밑에 깔린 표의 RLS 를 통째로 지나친다. 표만 잠그고 뷰를 안 잠그면 헛일이다.
+--   (hd-project03 에서 실제로 남의 업체 실사 결과가 뷰로 그대로 보였다.
+--    tests/server.test.js 의 "업체는 보고서 뷰로도 남의 자료를 볼 수 없다" 가 잡는다)
+--   security_invoker 는 PostgreSQL 15 부터. Supabase 는 15 이상이다.
+create or replace view public.purchase_expanded with (security_invoker = true) as
 with model_cnt as (
   select part_no, count(*)::numeric as n from public.model group by part_no
 )
@@ -159,7 +166,7 @@ from public.purchase p
 left join public.model m on m.part_no = p.part_no
 left join model_cnt c          on c.part_no = p.part_no;
 
-create or replace view public.by_tonnage as
+create or replace view public.by_tonnage with (security_invoker = true) as
 select period, coalesce(tonnage, '(미매칭)') as tonnage, min(tonnage_num) as tonnage_num,
        count(distinct part_no) as part_count,
        count(distinct vendor_name) as vendor_count,
@@ -167,14 +174,14 @@ select period, coalesce(tonnage, '(미매칭)') as tonnage, min(tonnage_num) as 
 from public.purchase_expanded
 group by period, coalesce(tonnage, '(미매칭)');
 
-create or replace view public.by_model as
+create or replace view public.by_model with (security_invoker = true) as
 select period, coalesce(tonnage, '(미매칭)') as tonnage, coalesce(model, '(미매칭)') as model,
        count(distinct part_no) as part_count,
        sum(qty_alloc) as qty, sum(amount_alloc) as amount
 from public.purchase_expanded
 group by period, coalesce(tonnage, '(미매칭)'), coalesce(model, '(미매칭)');
 
-create or replace view public.by_vendor as
+create or replace view public.by_vendor with (security_invoker = true) as
 select period, vendor_name,
        count(distinct part_no) as part_count,
        sum(qty_alloc) as qty, sum(amount_alloc) as amount,
@@ -185,7 +192,7 @@ from public.purchase_expanded
 group by period, vendor_name;
 
 -- 모델 마스터에 없는 품번 — 대시보드가 조용히 빠뜨리는 것을 드러낸다
-create or replace view public.unmatched_parts as
+create or replace view public.unmatched_parts with (security_invoker = true) as
 select distinct p.period, p.part_no, p.part_name, p.vendor_name, p.qty, p.amount
 from public.purchase p
 where not exists (select 1 from public.model m where m.part_no = p.part_no);
